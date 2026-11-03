@@ -2415,6 +2415,375 @@ Once this manual Docker setup is understood, Docker Compose, production images, 
 
 **Manual Dockerization of a MERN application**
 
-## ⏭️ Next
+# 🐳 Docker Compose
 
-**Docker Compose → Multi-stage production builds → Nginx → VPS deployment → GitLab CI/CD**
+After manually running the frontend, backend, MongoDB container, network, and volume, we moved to **Docker Compose** to manage the complete application from one configuration file.
+
+## Why Docker Compose?
+
+Without Compose, we had to manage:
+
+```text
+Frontend container
+Backend container
+MongoDB container
+Docker network
+MongoDB volume
+Environment variables
+Port mappings
+```
+
+This required multiple `docker run` and `docker network` commands.
+
+With Compose, these configurations are defined in one file:
+
+```text
+compose.yaml
+     ↓
+client
+server
+mongo
+network
+volume
+```
+
+Then the complete application can be started with:
+
+```bash
+docker compose up -d
+```
+
+---
+
+## Compose Project Structure
+
+```text
+docker-mern-task-manager/
+├── client/
+├── server/
+├── .env
+├── .gitignore
+└── compose.yaml
+```
+
+The `.env` file is kept locally and is not committed to Git.
+
+---
+
+## Root `.env`
+
+```env
+CLIENT_PORT=4173
+SERVER_PORT=5001
+MONGO_PORT=27017
+MONGO_DATABASE=docker_task_manager
+```
+
+These variables allow the ports and MongoDB database name to be configured from one place.
+
+---
+
+## `compose.yaml`
+
+```yaml
+services:
+
+  client:
+    build:
+      context: ./client
+      args:
+        VITE_API_URL: http://localhost:${SERVER_PORT}
+
+    ports:
+      - "${CLIENT_PORT}:4173"
+
+    depends_on:
+      - server
+
+  server:
+    build:
+      context: ./server
+
+    ports:
+      - "${SERVER_PORT}:5000"
+
+    environment:
+      PORT: 5000
+      MONGODB_URI: mongodb://mongo:27017/${MONGO_DATABASE}
+
+    depends_on:
+      - mongo
+
+  mongo:
+    image: mongo:8
+
+    ports:
+      - "${MONGO_PORT}:27017"
+
+    volumes:
+      - mongo-data:/data/db
+
+
+volumes:
+  mongo-data:
+```
+
+---
+
+## Services
+
+Compose manages three services:
+
+```text
+client → React + Vite
+server → Node + Express
+mongo  → MongoDB
+```
+
+### Client
+
+Builds the React application and exposes port `4173`.
+
+```text
+localhost:4173
+```
+
+### Server
+
+Builds the Node.js backend and exposes:
+
+```text
+localhost:5001
+```
+
+Inside the container, the backend runs on:
+
+```text
+5000
+```
+
+Port mapping:
+
+```text
+5001 → 5000
+```
+
+### Mongo
+
+Uses the official MongoDB image:
+
+```text
+mongo:8
+```
+
+and stores database data in:
+
+```text
+mongo-data
+```
+
+---
+
+## Docker Compose Networking
+
+Compose automatically creates a network for the services.
+
+The backend connects to MongoDB using the service name:
+
+```text
+mongodb://mongo:27017/docker_task_manager
+```
+
+Not:
+
+```text
+mongodb://localhost:27017/docker_task_manager
+```
+
+Inside the backend container:
+
+```text
+localhost
+```
+
+means the backend container itself.
+
+```text
+mongo
+```
+
+refers to the MongoDB service.
+
+---
+
+# Compose Commands Used
+
+## 1. Validate configuration
+
+```bash
+docker compose config
+```
+
+Checks whether `compose.yaml` is valid.
+
+---
+
+## 2. Build and start everything
+
+```bash
+docker compose up -d --build
+```
+
+Meaning:
+
+```text
+up       → start services
+-d       → run in background
+--build  → build images
+```
+
+---
+
+## 3. Check services
+
+```bash
+docker compose ps
+```
+
+Shows the Compose-managed containers.
+
+Expected services:
+
+```text
+client
+server
+mongo
+```
+
+---
+
+## 4. View all logs
+
+```bash
+docker compose logs
+```
+
+---
+
+## 5. Follow logs
+
+```bash
+docker compose logs -f
+```
+
+---
+
+## 6. View backend logs
+
+```bash
+docker compose logs -f server
+```
+
+This is especially useful when debugging the backend.
+
+---
+
+## 7. Stop the Compose application
+
+```bash
+docker compose down
+```
+
+This removes the Compose containers but keeps the named MongoDB volume.
+
+---
+
+## ⚠️ Important
+
+Avoid using:
+
+```bash
+docker compose down -v
+```
+
+unless you intentionally want to remove the Compose volumes.
+
+The MongoDB data is stored in:
+
+```text
+mongo-data
+```
+
+---
+
+# Testing
+
+Frontend:
+
+```text
+http://localhost:4173
+```
+
+Backend health check using Postman:
+
+```text
+GET http://localhost:5001/api/health
+```
+
+Tasks:
+
+```text
+GET    http://localhost:5001/api/tasks
+POST   http://localhost:5001/api/tasks
+DELETE http://localhost:5001/api/tasks/:id
+```
+
+---
+
+# Final Compose Architecture
+
+```text
+                    Browser
+                       │
+             ┌─────────┴─────────┐
+             │                   │
+        :4173                 :5001
+             │                   │
+             ▼                   ▼
+      ┌────────────┐      ┌────────────┐
+      │   Client   │      │   Server   │
+      │ React/Vite │─────▶│ Node/Express│
+      └────────────┘      └─────┬──────┘
+                                │
+                         Compose Network
+                                │
+                                ▼
+                         ┌────────────┐
+                         │   Mongo    │
+                         │  MongoDB   │
+                         └─────┬──────┘
+                               │
+                               ▼
+                         mongo-data
+                            Volume
+```
+
+## What We Achieved
+
+```text
+✅ Created Dockerfiles
+✅ Built frontend image
+✅ Built backend image
+✅ Created MongoDB container
+✅ Created Docker network
+✅ Created MongoDB volume
+✅ Connected backend → MongoDB
+✅ Configured environment variables
+✅ Added Docker Compose
+✅ Defined client/server/mongo services
+✅ Added persistent MongoDB storage
+✅ Started the complete application with Compose
+```
+
+The major improvement is that the entire application can now be managed from one `compose.yaml` file instead of manually creating each container, network, and volume.
+

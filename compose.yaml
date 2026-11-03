@@ -1,0 +1,40 @@
+services:
+
+  client:
+    build:
+      context: ./client
+      args:
+        VITE_API_URL: http://localhost:${SERVER_PORT}
+
+    ports:
+      - "${CLIENT_PORT}:4173"
+
+    depends_on:
+      - server
+
+  server:
+    build:
+      context: ./server
+
+    ports:
+      - "${SERVER_PORT}:5000"
+
+    environment:
+      PORT: 5000
+      MONGODB_URI: mongodb://mongo:27017/${MONGO_DATABASE}
+
+    depends_on:
+      - mongo
+
+  mongo:
+    image: mongo:8
+
+    ports:
+      - "${MONGO_PORT}:27017"
+
+    volumes:
+      - mongo-data:/data/db
+
+
+volumes:
+  mongo-data:
