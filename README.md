@@ -2787,3 +2787,399 @@ DELETE http://localhost:5001/api/tasks/:id
 
 The major improvement is that the entire application can now be managed from one `compose.yaml` file instead of manually creating each container, network, and volume.
 
+---
+
+# 🐳 Multi-Stage Builds, Production Docker Images & Nginx
+
+## 1. Objective
+
+Improve our existing Dockerized MERN application by creating production-oriented Docker images.
+
+Previously, the React frontend was built and served using Node.js and Vite Preview.
+
+We changed this approach to:
+
+* Build React using Node.js.
+* Use Nginx to serve the production frontend.
+* Use Multi-Stage Builds to separate build and runtime environments.
+* Optimize the backend image by installing only production dependencies.
+
+## 2. Multi-Stage Build
+
+A Multi-Stage Build allows multiple `FROM` instructions inside a Dockerfile.
+
+Each stage performs a separate responsibility.
+
+Frontend architecture:
+
+```text
+Stage 1: Build
+Node.js
+   |
+Install dependencies
+   |
+Build React
+   |
+Generate dist/
+   |
+   ▼
+Stage 2: Production
+Nginx
+   |
+Copy dist/
+   |
+Serve React application
+```
+
+### Important instructions
+
+| Instruction         | Purpose                                 |
+| ------------------- | --------------------------------------- |
+| `FROM`              | Selects a base image                    |
+| `AS build`          | Names a build stage                     |
+| `COPY --from=build` | Copies files from another stage         |
+| `RUN`               | Executes commands during image building |
+| `EXPOSE`            | Documents the container port            |
+| `CMD`               | Defines the startup command             |
+
+## 3. Production Frontend Dockerfile
+
+File:
+
+```text
+client/Dockerfile
+```
+
+```dockerfile
+# Stage 1: Build React Application
+FROM node:20-alpine AS build
+
+WORKDIR /app
+
+ARG VITE_API_URL
+ENV VITE_API_URL=$VITE_API_URL
+
+COPY package*.json ./
+
+RUN npm ci
+
+COPY . .
+
+RUN npm run build
+
+
+# Stage 2: Production - Nginx
+FROM nginx:alpine
+
+COPY --from=build /app/dist /usr/share/nginx/html
+
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]
+```
+
+### What happens?
+
+* Node.js installs dependencies.
+* React is built using `npm run build`.
+* Vite generates the `dist/` folder.
+* Nginx receives the generated files.
+* Nginx serves the production application.
+
+The final frontend image uses Nginx instead of the Node.js build environment.
+
+## 4. Nginx Configuration
+
+File:
+
+```text
+client/nginx.conf
+```
+
+```nginx
+server {
+    listen 80;
+
+    server_name localhost;
+
+    root /usr/share/nginx/html;
+
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
+```
+
+### Why `try_files`?
+
+React applications use client-side routing.
+
+When a user directly opens a frontend route, Nginx should serve `index.html` instead of returning a 404 for a missing physical file.
+
+```nginx
+try_files $uri $uri/ /index.html;
+```
+
+This provides the fallback required for React routing.
+
+## 5. Production Backend Dockerfile
+
+File:
+
+```text
+server/Dockerfile
+```
+
+```dockerfile
+# Stage 1: Install production dependencies
+FROM node:20-alpine AS deps
+
+WORKDIR /app
+
+COPY package*.json ./
+
+RUN npm ci --omit=dev
+
+
+# Stage 2: Production runtime
+FROM node:20-alpine AS production
+
+WORKDIR /app
+
+ENV NODE_ENV=production
+
+COPY --from=deps /app/node_modules ./node_modules
+
+COPY package*.json ./
+
+COPY src ./src
+
+EXPOSE 5000
+
+CMD ["npm", "start"]
+```
+
+### What changed?
+
+* Uses `npm ci` for dependency installation from the lockfile.
+* Uses `npm ci --omit=dev` to exclude development dependencies.
+* Uses a separate production runtime stage.
+* Sets `NODE_ENV=production`.
+* Copies application source and production dependencies into the final image.
+
+## 6. Docker Compose Production Configuration
+
+The frontend now uses Nginx on internal port `80`.
+
+Relevant configuration:
+
+```yaml
+client:
+  build:
+    context: ./client
+    args:
+      VITE_API_URL: http://localhost:${SERVER_PORT}
+
+  ports:
+    - "${CLIENT_PORT}:80"
+
+  depends_on:
+    - server
+```
+
+Backend:
+
+```yaml
+server:
+  build:
+    context: ./server
+
+  ports:
+    - "${SERVER_PORT}:5000"
+
+  environment:
+    PORT: 5000
+    NODE_ENV: production
+    MONGODB_URI: mongodb://mongo:27017/${MONGO_DATABASE}
+
+  depends_on:
+    - mongo
+```
+
+MongoDB continues using its named volume for persistent storage.
+
+## 7. Port Mapping
+
+Frontend:
+
+```text
+Host Port:      4173
+Container Port: 80
+```
+
+Backend:
+
+```text
+Host Port:      5001
+Container Port: 5000
+```
+
+Application URLs:
+
+```text
+Frontend: http://localhost:4173
+Backend:  http://localhost:5001
+```
+
+## 8. Commands Used
+
+### Stop old containers
+
+```bash
+docker compose down
+```
+
+### Validate Compose configuration
+
+```bash
+docker compose config
+```
+
+### Build production images
+
+```bash
+docker compose build
+```
+
+### Start all services
+
+```bash
+docker compose up -d
+```
+
+### Check containers
+
+```bash
+docker compose ps
+```
+
+### Follow frontend/Nginx logs
+
+```bash
+docker compose logs -f client
+```
+
+### Follow backend logs
+
+```bash
+docker compose logs -f server
+```
+
+### Stop application
+
+```bash
+docker compose down
+```
+
+**Important:** We use `docker compose down` for normal cleanup. We avoid `docker compose down -v` because it removes Compose-managed volumes, including our MongoDB data volume.
+
+## 9. Testing
+
+Frontend:
+
+```text
+http://localhost:4173
+```
+
+Backend health:
+
+```text
+GET http://localhost:5001/api/health
+```
+
+Get tasks:
+
+```text
+GET http://localhost:5001/api/tasks
+```
+
+Create task:
+
+```text
+POST http://localhost:5001/api/tasks
+```
+
+Delete task:
+
+```text
+DELETE http://localhost:5001/api/tasks/:id
+```
+
+API endpoints were tested using Postman.
+
+## 10. Final Architecture
+
+```text
+                 Browser
+                    |
+             localhost:4173
+                    |
+                    ▼
+             Nginx Container
+                    |
+               React dist/
+                    |
+                    |
+             localhost:5001
+                    |
+                    ▼
+             Node/Express
+               Container
+                    |
+              Docker Network
+                    |
+                    ▼
+             MongoDB Container
+                    |
+                    ▼
+               mongo-data
+                  Volume
+```
+
+## 11. What We Learned
+
+```text
+Multi-Stage Builds
+    |
+    ├── Separate build and runtime stages
+    ├── COPY --from
+    └── Smaller final images
+
+Nginx
+    |
+    ├── Web server
+    ├── Static file serving
+    └── React routing fallback
+
+Production Docker Images
+    |
+    ├── Production dependencies
+    ├── NODE_ENV=production
+    └── Separate runtime environment
+
+Docker Compose
+    |
+    ├── Build services
+    ├── Start services
+    ├── View logs
+    └── Manage containers
+```
+
+**Next Learning Topic:**
+
+VPS Deployment using GitLab and GitLab CI/CD.
+
